@@ -1,0 +1,305 @@
+---
+title: "Comparing two independent builds of the armed conflict analytical data set"
+author: "Jim Wang"
+date: today
+format:
+  pdf:
+    toc: false
+    number-sections: true
+execute:
+  warning: false
+  message: false
+---
+
+```{r}
+#| include: false
+library(tidyverse)
+library(knitr)
+library(here)
+```
+
+## What is being compared
+
+`final_data.csv` was built in the week 3 in-class assignment by
+`R/create_final_data.R`, which uses the tidyverse: `pivot_longer()` for the
+World Bank files, `pivot_wider()` for the disaster indicators, `group_by()` and
+`summarise()` for the conflict deaths, and `left_join()` to merge.
+
+`final_data_agent.csv` was built by `R/create_final_data_agent.R`, which a
+coding agent wrote from the same written specification without reusing any of
+that code. It uses base R only: `reshape()`, `aggregate()`, `merge()` and
+`split()`. The point of writing it twice in two different dialects is that an
+error in one implementation is unlikely to repeat itself in the other, so any
+disagreement between the two outputs points at something worth checking.
+
+```{r}
+own <- read.csv(here("data", "processed", "final_data.csv"))
+agent <- read.csv(here("data", "processed", "final_data_agent.csv"))
+```
+
+## Shape and column names
+
+```{r}
+tibble(
+  Check = c("Rows", "Columns", "Column names identical", "Column order identical"),
+  Own = c(nrow(own), ncol(own), "", ""),
+  Agent = c(nrow(agent), ncol(agent), "", ""),
+  Agree = c(nrow(own) == nrow(agent),
+            ncol(own) == ncol(agent),
+            setequal(names(own), names(agent)),
+            identical(names(own), names(agent)))
+) |>
+  kable(caption = "Dimensions and column names")
+```
+
+Both files have 3720 rows, which is exactly 186 countries times 20 years
+(2000 to 2019). That is the balanced panel the paper describes, so neither
+build dropped or duplicated a country-year.
+
+## Cell by cell comparison
+
+```{r}
+agent <- agent[, names(own)]
+own <- own[order(own$iso, own$year), ]
+agent <- agent[order(agent$iso, agent$year), ]
+row.names(own) <- NULL
+row.names(agent) <- NULL
+
+comparison <- all.equal(own, agent)
+identical_output <- isTRUE(comparison)
+identical_output
+```
+
+```{r}
+mismatch_count <- function(x, y) {
+  both_na <- is.na(x) & is.na(y)
+  sum(!both_na & (is.na(x) != is.na(y) | x != y), na.rm = TRUE)
+}
+
+map_int(names(own), \(v) mismatch_count(own[[v]], agent[[v]])) |>
+  set_names(names(own)) |>
+  enframe(name = "Variable", value = "Disagreeing cells") |>
+  kable(caption = "Number of country-years where the two builds disagree")
+```
+
+Every column agrees in every one of the 3720 rows, missing values included.
+The two implementations produce the same data set.
+
+## Checks on the derived variables
+
+Agreement between two implementations only shows that they made the same
+choices. The checks below ask whether those choices match the paper.
+
+```{r}
+tibble(
+  Quantity = c("Countries", "Years", "Country-years with armed conflict",
+               "Country-years with an earthquake",
+               "Country-years with a drought",
+               "First year of lagged exposure that is missing"),
+  Value = c(n_distinct(own$iso),
+            paste(min(own$year), "to", max(own$year)),
+            sum(own$armedconflict),
+            sum(own$earthquake),
+            sum(own$drought),
+            sum(is.na(own$armedconflict_lag1)))
+) |>
+  kable(caption = "Derived quantities in the merged data")
+```
+
+The lagged exposure is missing for exactly 186 rows, one per country, which is
+the year 2000 row where no earlier year exists. The lag was computed within
+country, so no country inherits the previous country's last value.
+
+```{r}
+own |>
+  filter(iso %in% c("AFG", "CAN")) |>
+  group_by(iso) |>
+  slice_head(n = 3) |>
+  select(iso, year, armedconflict, armedconflict_lag1) |>
+  kable(caption = "The lag resets at each country")
+```
+
+## Where the two builds could have diverged
+
+Three judgment calls in the specification are not fully determined by the
+assignment text. Both builds resolved them the same way, so they do not show up
+as disagreements between the two files, but each of them changes the data if
+resolved differently, and they are the first places to look if these numbers do
+not match a classmate's.
+
+### Which year column defines a disaster
+
+```{r}
+dis_raw <- read.csv(here("data", "raw", "disaster.csv"), check.names = TRUE) |>
+  filter(Disaster.Type %in% c("Earthquake", "Drought"))
+
+tibble(
+  Check = c("Earthquake and drought rows in the file",
+            "Rows kept by `Year` in 2000 to 2019",
+            "Rows kept by `Start Year` in 2000 to 2019",
+            "Rows where `Year` and `Start Year` differ"),
+  Rows = c(nrow(dis_raw),
+           sum(dis_raw$Year >= 2000 & dis_raw$Year <= 2019),
+           sum(dis_raw$Start.Year >= 2000 & dis_raw$Start.Year <= 2019),
+           sum(dis_raw$Year != dis_raw$Start.Year, na.rm = TRUE))
+) |>
+  kable(caption = "Disaster year: the `Year` column versus the `Start Year` column")
+```
+
+The two columns are not interchangeable. They disagree on 25 rows, all of them
+droughts, where EM-DAT records the year the drought was entered under and a
+later year as the year it began.
+
+```{r}
+dis_raw |>
+  filter(Year != Start.Year) |>
+  count(Disaster.Type, name = "Rows") |>
+  kable(caption = "Which disaster types have a `Year` that differs from `Start Year`")
+```
+
+The table below rebuilds the disaster indicators under each choice.
+
+```{r}
+build_disaster <- function(year_col) {
+  keep <- dis_raw[dis_raw[[year_col]] >= 2000 & dis_raw[[year_col]] <= 2019, ]
+  data.frame(iso = keep$ISO,
+             year = keep[[year_col]],
+             type = keep$Disaster.Type) |>
+    distinct() |>
+    mutate(value = 1) |>
+    pivot_wider(names_from = type, values_from = value, values_fill = 0) |>
+    janitor::clean_names()
+}
+
+by_year <- build_disaster("Year")
+by_start <- build_disaster("Start.Year")
+
+differing <- full_join(by_year, by_start, by = c("iso", "year"),
+                       suffix = c("_year", "_start")) |>
+  mutate(across(where(is.numeric), \(x) replace_na(x, 0))) |>
+  filter(earthquake_year != earthquake_start | drought_year != drought_start)
+
+tibble(
+  Quantity = c("Country-years with a disaster",
+               "Earthquake country-years",
+               "Drought country-years"),
+  `Using Year` = c(nrow(by_year), sum(by_year$earthquake), sum(by_year$drought)),
+  `Using Start Year` = c(nrow(by_start), sum(by_start$earthquake),
+                         sum(by_start$drought))
+) |>
+  kable(caption = "The disaster indicators under each year definition")
+```
+
+```{r}
+nrow(differing)
+```
+
+Switching to `Start Year` would move `r nrow(differing)` country-years, all of
+them droughts. Both builds use `Year`, which is what the week 3 instructions
+named, so the two files agree, but this is a real choice with a real effect and
+not a difference that can be ignored.
+
+### Repeated disasters within one country-year
+
+```{r}
+dis_raw |>
+  filter(Year >= 2000, Year <= 2019) |>
+  count(ISO, Year, Disaster.Type) |>
+  summarise(`Country-year-type combinations` = n(),
+            `Of those, with more than one event` = sum(n > 1),
+            `Largest number of events in one country-year` = max(n)) |>
+  pivot_longer(everything(), names_to = "Check", values_to = "Count") |>
+  kable(caption = "Repeated disasters in the same country and year")
+```
+
+Both builds collapse these to a single indicator rather than a count, so a
+country-year with three earthquakes is coded 1. The week 3 version does this
+with `distinct()` before `pivot_wider()`, the agent version with `max()` inside
+`aggregate()`, and the two give the same answer.
+
+### The conflict threshold
+
+```{r}
+conflict_raw <- read.csv(here("data", "raw", "conflict.csv"))
+
+conflict_cy <- conflict_raw |>
+  group_by(iso, year) |>
+  summarise(deaths = sum(best, na.rm = TRUE), .groups = "drop")
+
+conflict_cy |>
+  summarise(`Country-years in the conflict file` = n(),
+            `Reaching 25 deaths` = sum(deaths >= 25),
+            `Below 25 deaths` = sum(deaths < 25)) |>
+  pivot_longer(everything(), names_to = "Check", values_to = "Count") |>
+  kable(caption = "The conflict file collapsed to country-years")
+```
+
+Both builds sum `best` over every conflict active in a country-year and code
+the exposure as 1 when the total reaches 25 battle related deaths, which is the
+UCDP definition the paper uses. Summing before thresholding matters: a country
+with three separate conflicts of ten deaths each is exposed under this rule and
+would not be if each conflict were tested on its own.
+
+## One number that does not reconcile with the paper
+
+The paper reports 522 country-years of minor conflict and 148 of war, which is
+670 exposed country-years. This data set has 665.
+
+```{r}
+exposed <- conflict_cy |> filter(deaths >= 25)
+
+tibble(
+  Source = c("Paper (522 minor + 148 war)",
+             "Conflict file, 25 death threshold, all years",
+             "Conflict file, 25 death threshold, 2000 to 2019",
+             "In final_data.csv after the merge"),
+  `Country-years` = c(670,
+                      nrow(exposed),
+                      sum(exposed$year >= 2000 & exposed$year <= 2019),
+                      sum(own$armedconflict))
+) |>
+  kable(caption = "Reconciling the exposure count against the paper")
+```
+
+```{r}
+exposed |>
+  filter(year >= 2000, year <= 2019) |>
+  anti_join(own, by = c("iso", "year")) |>
+  nrow()
+```
+
+The merge loses nothing: every exposed country-year in 2000 to 2019 survives
+into `final_data.csv`, and the drop from 704 to 665 is entirely years outside
+the study window. So the five country-year gap against the paper is not a
+merge problem and not something either implementation introduced.
+
+The disaster indicators do lose a few country-years at the merge, because some
+ISO codes in EM-DAT have no World Bank mortality data.
+
+```{r}
+tibble(
+  Indicator = c("Earthquake", "Drought"),
+  `Before the merge` = c(sum(by_year$earthquake), sum(by_year$drought)),
+  `In final_data.csv` = c(sum(own$earthquake), sum(own$drought))
+) |>
+  kable(caption = "Disaster country-years lost to countries with no mortality data")
+```
+
+Those countries have no outcome to contribute and cannot enter the analysis, so
+dropping them is correct rather than a loss.
+
+## Conclusion
+
+Two independent implementations, one in the tidyverse and one in base R,
+produce identical output: 3720 rows, 18 columns, no disagreeing cells. The
+derived variables behave as intended, the lag resets at each country, and the
+indicator zeros are true zeros rather than unknowns. No edit to
+`final_data.csv` is needed.
+
+Two things are worth raising in class. The first is that `Year` and `Start Year`
+in the EM-DAT file disagree on 25 drought rows, and choosing one over the other
+moves 21 country-years of the drought indicator. The second is the five
+country-year gap between this data set's 665 exposed country-years and the
+paper's 670; the merge accounts for none of it, so it is most likely a
+difference in the vintage of the UCDP release or in how the countries the paper
+excludes were handled, and the code cannot settle it.
