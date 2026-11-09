@@ -34,3 +34,4 @@ Each script produces one output and is named after it.
 - `R/fig01_matmor_increase.R` plots the maternal mortality trend for the 13 countries where it rose between 2000 and 2017, one colour and one direct label per country. It writes `outputs/figures/fig01_matmor_increase.png`.
 
 The window ends in 2017 because the World Bank maternal mortality series has no values for 2018 or 2019 for any country.
+- `R/table02_regression.R` fits the four mortality models with `plm()`, using country and year fixed effects, armed conflict lagged by one year, and GDP per capita on the log scale, with standard errors clustered by country. It writes `outputs/tables/table02_regression.pdf`, laid out like Table 2 in the paper for the binary conflict specification, and prints a comparison of the GDP coefficient on the raw and log scales.
