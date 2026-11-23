@@ -35,3 +35,8 @@ Each script produces one output and is named after it.
 
 The window ends in 2017 because the World Bank maternal mortality series has no values for 2018 or 2019 for any country.
 - `R/table02_regression.R` fits the four mortality models with `plm()`, using country and year fixed effects, armed conflict lagged by one year, and GDP per capita on the log scale, with standard errors clustered by country. It writes `outputs/tables/table02_regression.pdf`, laid out like Table 2 in the paper for the binary conflict specification, and prints a comparison of the GDP coefficient on the raw and log scales.
+
+## Simulation study
+
+- `R/simulation_confounding.R` is the week 10 simulation. It generates a binary confounder, exposure and outcome where the exposure has no true effect, fits the logistic regression with and without the confounder to 1000 data sets of 500 people for each of three strengths of confounding, and records how often the null hypothesis is rejected at the 0.05 level. It needs only base R and writes `outputs/tables/simulation_type1_error.csv`.
+- `reports/simulation_confounding.qmd` runs that script and reports the Type I error table with a short interpretation. The rendered PDF is `reports/simulation_confounding.pdf`.

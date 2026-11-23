@@ -1,0 +1,88 @@
+---
+title: "Type I error when a binary confounder is left out of a logistic regression"
+author: "Jim Wang"
+date: today
+format:
+  pdf:
+    number-sections: true
+execute:
+  warning: false
+  message: false
+---
+
+```{r}
+#| include: false
+library(knitr)
+library(here)
+
+# runs the whole simulation (about one second) and writes the results table
+old <- setwd(here())
+source(here("R", "simulation_confounding.R"))
+invisible(setwd(old))
+```
+
+## Setup
+
+Each data set has a binary confounder $Z$ (smoking), a binary exposure $X$ (coffee) and a binary outcome $Y$ (lung cancer). $Z$ affects both $X$ and $Y$. $X$ has **no** effect on $Y$ ($\beta_1 = 0$), so any rejection of $H_0: \beta_1 = 0$ is a false positive.
+
+| Quantity | Value |
+|---|---|
+| Sample size | `r n_obs` |
+| Simulations per scenario | `r n_sim` |
+| Significance level | `r sig_level` |
+| $\Pr(Z = 1)$ | `r pz` |
+| $\text{logit}\Pr(X = 1) = \alpha_0 + \alpha_1 Z$ | $\alpha_0 = 0$, $\alpha_1 \in \{0, 1, 2\}$ |
+| $\text{logit}\Pr(Y = 1) = \beta_0 + \beta_1 X + \beta_2 Z$ | $\beta_0 = -3$, $\beta_1 = 0$, $\beta_2 = 2$ |
+
+In every simulated data set both models were fitted:
+
+- unadjusted: $\text{logit}\Pr(Y=1) = \beta_0 + \beta_1 X$
+- adjusted: $\text{logit}\Pr(Y=1) = \beta_0 + \beta_1 X + \beta_2 Z$
+
+and $H_0: \beta_1 = 0$ was rejected when the Wald p-value for $X$ was below `r sig_level`. The Type I error rate is the proportion of the `r n_sim` simulations that rejected.
+
+## Result
+
+```{r}
+#| echo: false
+tab <- data.frame(
+  alpha1 = results$alpha1,
+  Adjusted = sprintf("%.3f", results$type1_adjusted),
+  Unadjusted = sprintf("%.3f", results$type1_unadjusted)
+)
+names(tab)[1] <- "$\\alpha_1$"
+kable(tab, align = "ccc", escape = FALSE,
+      caption = "Type I error rate, n = 500, 1000 simulations, significance level 0.05")
+```
+
+With 1000 simulations, a true rate of 0.05 would show up anywhere between about 0.036 and 0.064 (two Monte Carlo standard errors of 0.007 either side). Monte Carlo standard errors for every cell are in `outputs/tables/simulation_type1_error.csv`.
+
+The adjusted rate at $\alpha_1 = 2$ (`r sprintf("%.3f", results$type1_adjusted[3])`) sits just under that range. To see whether this is a real problem or chance, the same scenario was repeated with 20,000 simulations:
+
+```{r}
+#| include: false
+big <- do.call(rbind, mclapply(seq_len(20000), run_one, alpha1 = 2,
+                               seed_offset = 500000,
+                               mc.cores = max(1, detectCores() - 1)))
+```
+
+the adjusted model rejects `r sprintf("%.3f", mean(big[, "p_adj"] < sig_level))` of the time, and the unadjusted model `r sprintf("%.3f", mean(big[, "p_unadj"] < sig_level))`. So the low value in the table is chance from using only 1000 simulations.
+
+## What the table shows
+
+- **$\alpha_1 = 0$:** $Z$ does not affect $X$, so $Z$ is not a confounder. Both models reject about 5% of the time, as they should.
+- **$\alpha_1 = 1$ and $2$:** $Z$ now makes $X = 1$ more likely and also raises the risk of $Y$, which creates an association between $X$ and $Y$ even though $X$ does nothing. The unadjusted model rejects `r sprintf("%.0f%%", 100 * results$type1_unadjusted[2])` and `r sprintf("%.0f%%", 100 * results$type1_unadjusted[3])` of the time, far above the nominal 5%. Its average estimate of $\beta_1$ moves away from zero (`r sprintf("%.2f", results$mean_beta1_unadjusted[2])` and `r sprintf("%.2f", results$mean_beta1_unadjusted[3])` on the log odds scale) while the true value is 0.
+- **Adjusted model:** it stays close to 5% in all three scenarios. Its average estimate of $\beta_1$ stays near zero in all three.
+
+Leaving out a confounder does not just add noise. It makes a null exposure look harmful more often as the confounder gets more strongly tied to the exposure.
+
+## Reproducing
+
+From the project root:
+
+```bash
+Rscript R/simulation_confounding.R
+quarto render reports/simulation_confounding.qmd
+```
+
+Seeds are fixed inside the script (`2024 + i` plus a different offset for each scenario), so the numbers above are the same every time. The script uses `parallel::mclapply()`, which runs the simulations on several cores on macOS and Linux and gives the same numbers as a plain loop.
