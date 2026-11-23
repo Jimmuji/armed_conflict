@@ -1,0 +1,34 @@
+---
+title: "Week 10 in-class assignment: Type I error with and without adjusting for a confounder"
+author: "Jim Wang"
+date: today
+format:
+  pdf:
+    geometry: margin=1in
+execute:
+  warning: false
+  message: false
+---
+
+```{r}
+#| include: false
+library(knitr)
+library(here)
+
+# the table is read from the saved simulation results
+results <- read.csv(here("outputs", "tables", "simulation_type1_error.csv"))
+```
+
+```{r}
+#| echo: false
+tab <- data.frame(
+  alpha1 = results$alpha1,
+  Adjusted = sprintf("%.3f", results$type1_adjusted),
+  Unadjusted = sprintf("%.3f", results$type1_unadjusted)
+)
+names(tab)[1] <- "$\\alpha_1$"
+kable(tab, align = "ccc", escape = FALSE,
+      caption = "Type I error rate, sample size 500, 1000 simulations, significance level 0.05")
+```
+
+When the true effect of X is zero, leaving out the confounder Z raised the Type I error from about 5% ($\alpha_1 = 0$) to `r sprintf("%.0f%%", 100 * results$type1_unadjusted[2])` ($\alpha_1 = 1$) and `r sprintf("%.0f%%", 100 * results$type1_unadjusted[3])` ($\alpha_1 = 2$), while the adjusted model stayed near 5% in all three scenarios.
